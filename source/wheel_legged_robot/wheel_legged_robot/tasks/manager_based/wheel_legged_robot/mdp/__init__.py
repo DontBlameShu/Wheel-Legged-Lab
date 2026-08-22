@@ -8,6 +8,7 @@
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .actions import *  # noqa: F401, F403
+from .direct_torque_actions import DirectTorqueVMCActionCfg
 from .commonds import *  # noqa: F401, F403
 from .curriculums import *  # noqa: F401, F403
 from .events import *  # noqa: F401, F403
@@ -15,3 +16,8 @@ from .jump import *  # noqa: F401, F403
 from .observations import *  # noqa: F401, F403
 from .power_on import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
+
+# All manager-based tasks that import VMCActionCfg through this package now use
+# the real-robot-compatible wheel torque action while retaining the existing
+# six-dimensional action interface.
+VMCActionCfg = DirectTorqueVMCActionCfg
