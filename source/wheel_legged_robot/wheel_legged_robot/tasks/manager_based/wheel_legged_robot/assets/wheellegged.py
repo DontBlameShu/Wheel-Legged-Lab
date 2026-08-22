@@ -41,26 +41,27 @@ WHEEL_LEGGED_CFG = ArticulationCfg(
     ),
     soft_joint_pos_limit_factor=0.9,
     actuators={
-        # 腿部关节：使用力矩控制
+        # 腿部关节：实机单电机额定 12 N·m、峰值 25 N·m。
+        # VMC 最终映射到四个实际电机，所以峰值限制应逐电机施加，
+        # 而不是把一条腿两个电机的 50 N·m 合并成单一关节限幅。
         "legs": DCMotorCfg(
             joint_names_expr=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
-            effort_limit=30.0,          # 根据 URDF 中的 effort
-            saturation_effort=30.0,
-            velocity_limit=30.0,        # rad/s
-            # 全部为0,做力矩控制：
-            stiffness=0.0,             # 位置增益
-            damping=0.0,                # 速度增益
+            effort_limit=25.0,
+            saturation_effort=25.0,
+            velocity_limit=30.0,
+            stiffness=0.0,
+            damping=0.0,
             friction=0.0,
         ),
-        # 轮子：使用力矩控制
+        # 轮子：DJI M3508 + 自制 268/17 减速箱，完全替换原装减速箱。
+        # 策略直接输出轮轴扭矩；4 N·m 作为短时峰值硬限制。
         "wheels": DCMotorCfg(
             joint_names_expr=["Left_Wheel_joint", "Right_Wheel_joint"],
-            effort_limit=5.0,           # URDF 中 effort=5
-            saturation_effort=5.0,
-            velocity_limit=1000.0,      # 轮子允许高速
-            # 全部为0,做力矩控制：
-            stiffness=0.0,              # 如果做速度控制，stiffness 设 0，用 damping 作比例增益
-            damping=0.0,                # 速度控制的比例系数
+            effort_limit=4.0,
+            saturation_effort=4.0,
+            velocity_limit=1000.0,
+            stiffness=0.0,
+            damping=0.0,
             friction=0.0,
         ),
     },
