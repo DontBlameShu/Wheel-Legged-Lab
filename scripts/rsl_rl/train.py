@@ -10,6 +10,10 @@
 import argparse
 import json
 import os
+os.add_dll_directory(r"D:\Program\miniconda3\envs\env_isaaclab\Lib\site-packages\numpy.libs")
+os.add_dll_directory(
+    r"D:\Program\miniconda3\envs\env_isaaclab\Lib\site-packages\isaacsim\exts\isaacsim.asset.importer.urdf\bin"
+)
 import sys
 from collections import deque
 from pathlib import Path
@@ -543,3 +547,5 @@ if __name__ == "__main__":
     main()
     # close sim app
     simulation_app.close()
+
+

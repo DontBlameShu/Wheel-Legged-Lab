@@ -28,6 +28,7 @@ class WheelLeggedCommand(CommandTerm):
         self._command = torch.zeros(self.num_envs, 4, device=self.device)
         # 标记是否采用朝向命令
         self._is_heading_env = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._is_standstill = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # 本体前向向量 (用于计算世界系下的航向)
         self._forward_vec = torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
         # 初始化指标缓冲区
@@ -50,6 +51,9 @@ class WheelLeggedCommand(CommandTerm):
             env_ids = env_ids[self._env.jump_phase[env_ids] == 0]
         if len(env_ids) == 0:
             return
+        if hasattr(self._env, "_hold_xy"):
+            asset = self._env.scene[self.cfg.asset_name]
+            self._env._hold_xy[env_ids] = asset.data.root_pos_w[env_ids, :2]
         r = torch.empty(len(env_ids), device=self.device)
         # 1. 线速度 x
         self._command[env_ids, 0] = r.uniform_(*self.cfg.ranges.lin_vel_x)
@@ -64,6 +68,19 @@ class WheelLeggedCommand(CommandTerm):
             self._is_heading_env[env_ids] = (
                 torch.rand(len(env_ids), device=self.device) < self.cfg.rel_heading_envs
             )
+        standstill = torch.rand(len(env_ids), device=self.device) < self.cfg.standstill_envs
+        self._is_standstill[env_ids] = standstill
+        standstill_ids = env_ids[standstill]
+        if len(standstill_ids) > 0:
+            asset = self._env.scene[self.cfg.asset_name]
+            self._command[standstill_ids, 0] = 0.0
+            self._command[standstill_ids, 1] = 0.0
+            self._command[standstill_ids, 2] = asset.data.root_pos_w[standstill_ids, 2]
+            if self.cfg.heading_command:
+                forward_w = quat_apply(asset.data.root_quat_w[standstill_ids], self._forward_vec[standstill_ids])
+                yaw_current = torch.atan2(forward_w[:, 1], forward_w[:, 0])
+                self._command[standstill_ids, 3] = yaw_current
+                self._is_heading_env[standstill_ids] = True
         # 重置跟踪误差指标（新命令周期重新开始统计）
         for key in self.metrics:
             self.metrics[key][env_ids] = 0.0
@@ -196,6 +213,8 @@ class WheelLeggedCommandCfg(CommandTermCfg):
     heading_control_stiffness: float = 1.5
     """朝向控制的刚度系数。"""
     rel_heading_envs: float = 1.0
+    standstill_envs: float = 0.0
+    """Fraction of command windows dedicated to explicit standstill training."""
     """采用朝向命令的环境比例（仅当 heading_command=True 时有效）。"""
     hold_command_during_jump: bool = False
     """跳跃状态机非 IDLE 时暂缓重采样速度命令。"""

@@ -142,6 +142,7 @@ class WheelLeggedVMCEnv(ManagerBasedRLEnv):
         self._last_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.device)
         self._feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)  # 4个足端（如有需要）
         self._last_base_position = torch.zeros(self.num_envs, 3, device=self.device)
+        self._hold_xy = torch.zeros(self.num_envs, 2, device=self.device)
 
         # ========== 域随机化捕获标记（第一次 reset 后才捕获，确保 startup 事件已执行） ==========
         self._domain_rand_captured = False
@@ -167,8 +168,11 @@ class WheelLeggedVMCEnv(ManagerBasedRLEnv):
         except Exception:
             self._base_com = torch.zeros(self.num_envs, 3, device=self.device)
 
-        # 关节默认位置偏移 — 只取前 6 个 actuated 关节（跳过 fixed joints）
-        default_pos = asset.data.default_joint_pos[:, :6]  # (num_envs, 6)
+        # Default joint position offset for all joints.
+        default_pos = asset.data.default_joint_pos
+        self._default_joint_offset = (
+        default_pos - default_pos.mean(dim=0, keepdim=True)
+        ).clone()
         self._default_joint_offset = (default_pos - default_pos.mean(dim=0, keepdim=True)).clone()
 
         # 摩擦/恢复系数：尝试从物理引擎读取已随机化的值
@@ -271,6 +275,8 @@ class WheelLeggedVMCEnv(ManagerBasedRLEnv):
         log["theta0_R"] = self.theta0[:, 1].mean().item()
         log["L0_L"] = self.L0[:, 0].mean().item()
         log["L0_R"] = self.L0[:, 1].mean().item()
+        log["theta0_dot_abs"] = self.theta0_dot.abs().mean().item()
+        log["L0_dot_abs"] = self.L0_dot.abs().mean().item()
         log["base_height"] = self.base_height.mean().item()
 
         # 关节位置（所有环境平均）
@@ -353,14 +359,38 @@ class WheelLeggedVMCEnv(ManagerBasedRLEnv):
         # 基座姿态
         if hasattr(self, "_robot"):
             gravity_b = self._robot.data.projected_gravity_b
-            log["tilt_angle"] = torch.acos(
-                torch.clamp(-gravity_b[:, 2], -1.0, 1.0)
-            ).mean().item()
+            tilt_each = torch.acos(torch.clamp(-gravity_b[:, 2], -1.0, 1.0))
+            log["tilt_angle"] = tilt_each.mean().item()
+            log["bad_ori_rate"] = (tilt_each > 0.8).float().mean().item()
+            log["low_height_rate"] = (self._robot.data.root_pos_w[:, 2] < 0.12).float().mean().item()
 
         # 动作统计
         if hasattr(self, "action_manager"):
             action = self.action_manager.action
             log["action_mean"] = action.mean().item()
+            log["a_theta_L"] = action[:, 0].mean().item()
+            log["a_L0_L"] = action[:, 1].mean().item()
+            log["a_wheel_L"] = action[:, 2].mean().item()
+            log["a_theta_R"] = action[:, 3].mean().item()
+            log["a_L0_R"] = action[:, 4].mean().item()
+            log["a_wheel_R"] = action[:, 5].mean().item()
+            vmc_term = self.action_manager.get_term("vmc")
+            qd = self._robot.data.joint_vel[:, vmc_term.joint_ids]
+            log["wheel_vel_L"] = qd[:, 2].mean().item()
+            log["wheel_vel_R"] = qd[:, 5].mean().item()
+            cs = self.scene.sensors["contact_forces"]
+            wl,_ = cs.find_bodies("Left_Wheel_link")
+            wr,_ = cs.find_bodies("Right_Wheel_link")
+            log["contact_L"] = torch.linalg.vector_norm(cs.data.net_forces_w[:, wl[0]], dim=-1).mean().item()
+            log["contact_R"] = torch.linalg.vector_norm(cs.data.net_forces_w[:, wr[0]], dim=-1).mean().item()
+            log["ctrl_wL"] = vmc_term.debug_wheel_vel[:, 0].mean().item()
+            log["ctrl_wR"] = vmc_term.debug_wheel_vel[:, 1].mean().item()
+            log["wref_L"] = vmc_term.debug_wheel_ref[:, 0].mean().item()
+            log["wref_R"] = vmc_term.debug_wheel_ref[:, 1].mean().item()
+            log["tauw_L"] = vmc_term.debug_wheel_torque[:, 0].mean().item()
+            log["tauw_R"] = vmc_term.debug_wheel_torque[:, 1].mean().item()
+            log["iw_L"] = vmc_term.debug_wheel_integral[:, 0].mean().item()
+            log["iw_R"] = vmc_term.debug_wheel_integral[:, 1].mean().item()
             log["action_std"] = action.std().item()
             log["action_abs_max"] = action.abs().max().item()
             vmc_term = self.action_manager.get_term("vmc")
@@ -421,6 +451,7 @@ class WheelLeggedVMCEnv(ManagerBasedRLEnv):
         self._last_dof_vel[env_ids] = 0.0
         self._feet_air_time[env_ids] = 0.0
         self._last_base_position[env_ids] = self._robot.data.root_pos_w[env_ids]
+        self._hold_xy[env_ids] = self._robot.data.root_pos_w[env_ids, :2]
 
         # 4. 重置运动学状态（避免观测读取到旧值）
         self.theta0[env_ids] = 0.0
@@ -438,9 +469,9 @@ class VmcActionsCfg:
         asset_name="robot",
         action_scale_theta=0.35,
         action_scale_l0=0.06,
-        # r=0.0675 m、半轮距=0.25 m。vx=1 m/s 且 heading 误差为 pi 时，
+        # r≈0.058 m、半轮距≈0.208 m。vx=1 m/s 且 heading 误差为 pi 时，
         # wz≈0.6*pi，快侧轮约需 21.8 rad/s；24 留出约 10% 余量。
-        action_scale_vel=24.0,
+        action_scale_vel=36.0,
         action_clip=1.0,
         l0_offset=0.237,
         l0_min=0.18,
@@ -452,9 +483,9 @@ class VmcActionsCfg:
         kd_l0=20.0,
         kp_wheel=0.5,
         kp_wheel_integral=0.2,
-        offset=0.054,
-        l1=0.15,
-        l2=0.25,
+        offset=0.0,
+        l1=0.215,
+        l2=0.254,
     )
 
 @configclass
@@ -498,7 +529,7 @@ class WheelleggedObservationsCfg:
             params={
                 "asset_cfg": SceneEntityCfg(
                     "robot",
-                    joint_names=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
+                    joint_names=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
                     preserve_order=True,
                 )
             },
@@ -511,7 +542,7 @@ class WheelleggedObservationsCfg:
             params={
                 "asset_cfg": SceneEntityCfg(
                     "robot",
-                    joint_names=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
+                    joint_names=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
                     preserve_order=True,
                 )
             },
@@ -541,7 +572,7 @@ class WheelleggedObservationsCfg:
         ) #2
         joint_wheel_vel = ObsTerm(
             func=mdp.joint_wheel_vel,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["l_wheel_Joint", "r_wheel_Joint"], preserve_order=True)},
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["Left_Wheel_joint", "Right_Wheel_joint"], preserve_order=True)},
             clip=(-100.0, 100.0),
             scale=1.0,
         ) #2
@@ -550,11 +581,27 @@ class WheelleggedObservationsCfg:
             clip=(-100.0, 100.0),
             scale=1.0,
         ) #6
+        hold_position_error = ObsTerm(
+            func=mdp.hold_position_error_body,
+            clip=(-2.0, 2.0),
+            scale=1.0,
+        ) #2
         # 3 + 3 + 3 + 2 + 2 + 2 + 2 + 2 + 2 + 6 = 27
 
         def __post_init__(self):
             self.enable_corruption = True
             self.concatenate_terms = True
+
+    @configclass
+    class PolicyHistoryCfg(PolicyCfg):
+        """Five-frame policy observation history for the encoder."""
+
+        def __post_init__(self):
+            super().__post_init__()
+            for name in ("base_lin_vel", "base_ang_vel", "projected_gravity", "velocity_commands", "leg_joint_pos", "leg_joint_vel", "theta0", "theta0_dot", "L0", "L0_dot", "joint_wheel_vel", "actions", "hold_position_error"):
+                term = getattr(self, name)
+                term.history_length = 5
+                term.flatten_history_dim = True
 
     @configclass
     class CriticCfg(ObsGroup):
@@ -622,7 +669,7 @@ class WheelleggedObservationsCfg:
         ) #2
         joint_wheel_vel = ObsTerm(
             func=mdp.joint_wheel_vel,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["l_wheel_Joint", "r_wheel_Joint"], preserve_order=True)},
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["Left_Wheel_joint", "Right_Wheel_joint"], preserve_order=True)},
             clip=(-100.0, 100.0),
             scale=1.0,
         ) #2
@@ -676,7 +723,17 @@ class WheelleggedObservationsCfg:
         ) #3
         default_joint_offset = ObsTerm(
             func=mdp.default_joint_offset,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*", preserve_order=True)},
+            params={"asset_cfg": SceneEntityCfg("robot",joint_names=[
+            "Left_rear_joint",
+            "Left_rear_child1_joint",
+            "Right_rear_joint",
+            "Right_rear_child1_joint",
+            "Left_Wheel_joint",
+            "Right_Wheel_joint",
+        ],
+        preserve_order=True,
+    )
+},
             clip=(-100.0, 100.0),
             scale=1.0,
         ) #6
@@ -690,6 +747,11 @@ class WheelleggedObservationsCfg:
             clip=(-100.0, 100.0),
             scale=1.0,
         ) #1
+        hold_position_error = ObsTerm(
+            func=mdp.hold_position_error_body,
+            clip=(-2.0, 2.0),
+            scale=1.0,
+        ) #2
         # 3 + 39 + 6 + 6 + 6 + 77 + 6 + 1 + 3 + 6 + 1 + 1 = 155
 
         def __post_init__(self):
@@ -698,6 +760,7 @@ class WheelleggedObservationsCfg:
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
+    policy_history: PolicyHistoryCfg = PolicyHistoryCfg()
     critic: CriticCfg = CriticCfg()
 
 
@@ -769,7 +832,7 @@ class WheelLeggedEventCfg:
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
-                joint_names=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
+                joint_names=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
             ),
             "offset_range": (-0.02, 0.02),
         },
@@ -860,15 +923,23 @@ class WheelLeggedRewardsCfg:
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
-                joint_names=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
+                joint_names=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
                 preserve_order=True,
             )
         },
     )
+    stationary_position = RewardTermCfg(
+        func=mdp.stationary_position_penalty,
+        weight=-0.5,
+        params={"command_name": "wheel_legged_commands", "pos_std": 0.5},
+    )
+    theta0_dot_damping = RewardTermCfg(func=mdp.theta0_dot_l2, weight=-0.250, params={"ref": 1.0, "command_name": "wheel_legged_commands"})
+    L0_dot_damping = RewardTermCfg(func=mdp.L0_dot_l2, weight=-0.15, params={"ref": 0.05, "command_name": "wheel_legged_commands"})
+    standstill_leg_action_rate = RewardTermCfg(func=mdp.standstill_leg_action_rate_l2, weight=-0.80, params={"command_name": "wheel_legged_commands"})
     dof_acc = RewardTermCfg(
         func=mdp.joint_acc_l2,
         # 历史日志显示该项曾是最大负奖励；过大会阻止快速平衡纠偏。
-        weight=-5e-8,
+        weight=0.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")},
     )
     torques = RewardTermCfg(
@@ -882,7 +953,7 @@ class WheelLeggedRewardsCfg:
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
-                joint_names=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
+                joint_names=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
                 preserve_order=True,
             )
         },
@@ -904,7 +975,7 @@ class WheelLeggedRewardsCfg:
     leg_collision = RewardTermCfg(
         func=mdp.undesired_contacts,
         weight=-2.0,  # 从 -0.3 提高，腿拖地很严重
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=["lf0_Link", "lf1_Link", "rf0_Link", "rf1_Link"]), "threshold": 0.1},
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Left_rear_link", "Left_rear_child1_link", "Right_rear_link", "Right_rear_child1_link"]), "threshold": 0.1},
     )
     nominal_state = RewardTermCfg(
         func=mdp.nominal_state,
@@ -917,7 +988,7 @@ class WheelLeggedRewardsCfg:
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
-                joint_names=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
+                joint_names=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
                 preserve_order=True,
             )
         },
@@ -970,23 +1041,23 @@ class WheelLeggedTerminationsCfg:
     bad_orientation = TerminationTermCfg(
         func=mdp.bad_orientation,
         time_out=False,
-        params={"asset_cfg": SceneEntityCfg("robot"), "limit_angle": 0.8},
+        params={"asset_cfg": SceneEntityCfg("robot"), "limit_angle": 0.6},
     )
-    joint_limits = TerminationTermCfg(
-        func=mdp.joint_pos_out_of_limit,
-        time_out=False,
-        params={
-            "asset_cfg": SceneEntityCfg(
-                "robot",
-                joint_names=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
-                preserve_order=True,
-            )
-        },
-    )
+    # joint_limits = TerminationTermCfg(
+    #     func=mdp.joint_pos_out_of_limit,
+    #     time_out=False,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg(
+    #             "robot",
+    #             joint_names=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
+    #             preserve_order=True,
+    #         )
+    #     },
+    # )
     minimum_height = TerminationTermCfg(
         func=mdp.root_height_below_minimum,
         time_out=False,
-        params={"asset_cfg": SceneEntityCfg("robot"), "minimum_height": 0.12},
+        params={"asset_cfg": SceneEntityCfg("robot"), "minimum_height": 0.20},
     )
 
     # illegal_contact = TerminationTermCfg(
@@ -1013,15 +1084,16 @@ class WheelLeggedCommandsCfg:
         asset_name="robot",
         resampling_time_range=(5.0, 5.0),       # 每 5 秒重采样一次
         heading_command=True,                   # 启用朝向控制
-        heading_control_stiffness=0.6,          # 从 1.5 降低，避免产生过大的瞬态角速度命令
-        rel_heading_envs=1.0,                   # 所有环境都使用朝向控制
+        heading_control_stiffness=1.0,          # 从 1.5 降低，避免产生过大的瞬态角速度命令
+        rel_heading_envs=1.0,
+        standstill_envs=0.15,                   # 所有环境都使用朝向控制
         ranges=mdp.WheelLeggedCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0),
+            lin_vel_x=(-2.0, 2.0),
             # heading 模式下 wz=0.6*wrap_to_pi(error)，理论最大约 1.885 rad/s。
             # ±2.0 已完整覆盖；设置成 ±5.0 不会产生更快的实际命令。
-            ang_vel_yaw=(-2.0, 2.0),
+            ang_vel_yaw=(-3.0, 3.0),
             # 必须高于 minimum_height=0.12；否则准确跟踪低高度命令会触发终止。
-            height=(0.16, 0.26),
+            height=(0.30, 0.38),
             heading=(-3.14, 3.14),
         ),
     )
@@ -1037,12 +1109,12 @@ class WheelLeggedCurriculumCfg:
             "reward_term_name": "track_lin_vel",           # 奖励项名称
             "command_name": "wheel_legged_commands",       # 命令项名称
             "angular_reward_term_name": "track_ang_vel",   # yaw 课程奖励项
-            "range_multiplier": (0.1, 1.0),                # 初始 10%，最终 100%
-            "threshold": 0.9,                              # 完整时长归一化得分阈值
-            "step_size": 0.05,                             # 每次扩大 0.05 m/s
-            "initial_ang_vel_limit": 0.5,                  # 初始最大 0.5 rad/s
-            "final_ang_vel_limit": 2.0,                    # 覆盖 0.6*pi
-            "angular_threshold": 0.85,
+            "range_multiplier": (0.5, 1.0),                # 初始 10%，最终 100%
+            "threshold": 0.85,                              # 完整时长归一化得分阈值
+            "step_size": 0.10,                             # 每次扩大 0.05 m/s
+            "initial_ang_vel_limit": 2.0,                  # 初始最大 0.5 rad/s
+            "final_ang_vel_limit": 3.0,                    # 覆盖 0.6*pi
+            "angular_threshold": 0.80,
             "angular_step_size": 0.25,
             "min_episodes": 256,                           # 异步完成的 episode 统计窗口
         },
@@ -1062,12 +1134,12 @@ class WheelLeggedFlatEnvCfg(ManagerBasedRLEnvCfg):
     base_link_name = "base_link"
     # fmt: off
     joint_names = [
-        "lf0_Joint",   # 索引 0
-        "lf1_Joint",   # 索引 1
-        "l_wheel_Joint", # 索引 2
-        "rf0_Joint",   # 索引 3
-        "rf1_Joint",   # 索引 4
-        "r_wheel_Joint", # 索引 5
+        "Left_rear_joint",   # 索引 0
+        "Left_rear_child1_joint",   # 索引 1
+        "Left_Wheel_joint", # 索引 2
+        "Right_rear_joint",   # 索引 3
+        "Right_rear_child1_joint",   # 索引 4
+        "Right_Wheel_joint", # 索引 5
     ]
     # fmt: on
 
@@ -1078,9 +1150,9 @@ class WheelLeggedFlatEnvCfg(ManagerBasedRLEnvCfg):
         super().__post_init__()
 
         # ===== 仿真参数 =====
-        self.decimation = 2
+        self.decimation = 5
         self.episode_length_s = 20.0
-        self.sim.dt = 0.005
+        self.sim.dt = 0.001
         self.sim.render_interval = self.decimation
         self.sim.physx.gpu_max_rigid_patch_count = 20 * 2**15
         self.sim.physics_material = self.scene.terrain.physics_material

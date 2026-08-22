@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.utils.math import quat_apply, wrap_to_pi
+from isaaclab.utils.math import quat_apply, wrap_to_pi
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
@@ -33,6 +35,46 @@ def L0_dot(env: ManagerBasedRLEnv) -> torch.Tensor:
     if not hasattr(env, "L0_dot"):
         return torch.zeros(env.num_envs, 2, device=env.device)
     return env.L0_dot  # 返回形状为 (num_envs, 2)
+
+def heading_error(env: ManagerBasedRLEnv, command_name: str = "wheel_legged_commands", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Wrapped target-heading error in [-pi, pi]."""
+    asset = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    forward = torch.tensor([1.0, 0.0, 0.0], device=env.device).unsqueeze(0).expand(env.num_envs, -1)
+    forward_w = quat_apply(asset.data.root_quat_w, forward)
+    yaw = torch.atan2(forward_w[:, 1], forward_w[:, 0])
+    return wrap_to_pi(cmd[:, 3] - yaw).unsqueeze(1)
+
+
+def hold_position_error_body(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Vector from robot to episode spawn position, expressed in robot yaw frame."""
+    if not hasattr(env, "_hold_xy"):
+        return torch.zeros(env.num_envs, 2, device=env.device)
+    asset = env.scene[asset_cfg.name]
+    delta_w = env._hold_xy - asset.data.root_pos_w[:, :2]
+    forward = torch.tensor([1.0, 0.0, 0.0], device=env.device).unsqueeze(0).expand(env.num_envs, -1)
+    forward_w = quat_apply(asset.data.root_quat_w, forward)
+    yaw = torch.atan2(forward_w[:, 1], forward_w[:, 0])
+    c = torch.cos(yaw)
+    sn = torch.sin(yaw)
+    ex = c * delta_w[:, 0] + sn * delta_w[:, 1]
+    ey = -sn * delta_w[:, 0] + c * delta_w[:, 1]
+    error = torch.stack((ex, ey), dim=1)
+    command_term = env.command_manager.get_term("wheel_legged_commands")
+    if not hasattr(command_term, "_is_standstill"):
+        return torch.zeros_like(error)
+    return error * command_term._is_standstill.float().unsqueeze(1)
+
+
+def heading_error(env: ManagerBasedRLEnv, command_name: str = "wheel_legged_commands", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Wrapped target-heading error in [-pi, pi]."""
+    asset = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    forward = torch.tensor([1.0, 0.0, 0.0], device=env.device).unsqueeze(0).expand(env.num_envs, -1)
+    forward_w = quat_apply(asset.data.root_quat_w, forward)
+    yaw = torch.atan2(forward_w[:, 1], forward_w[:, 0])
+    return wrap_to_pi(cmd[:, 3] - yaw).unsqueeze(1)
+
 
 def joint_wheel_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """The wheel joint positions of the asset."""

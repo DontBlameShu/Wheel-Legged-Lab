@@ -11,6 +11,9 @@ blends into an exported locomotion policy.  No PPO training is performed.
 from __future__ import annotations
 
 import argparse
+import os
+os.add_dll_directory(r"D:\Program\miniconda3\envs\env_isaaclab\Lib\site-packages\numpy.libs")
+os.add_dll_directory(r"D:\Program\miniconda3\envs\env_isaaclab\Lib\site-packages\isaacsim\exts\isaacsim.asset.importer.urdf\bin")
 import itertools
 from datetime import datetime
 from pathlib import Path
@@ -286,7 +289,10 @@ def main() -> None:
             raise FileNotFoundError(f"Exported JIT policy not found: {policy_path}")
         policy = torch.jit.load(str(policy_path), map_location=device).eval()
 
+    print("DBG BEFORE RESET", flush=True)
     observations, _ = env.reset()
+    print("DBG AFTER RESET", flush=True)
+    debug_start_x = robot.data.root_pos_w[:, 0].clone()
     _write_initial_states(unwrapped, robot, vmc_term, device)
     passive_durations = torch.tensor(
         [case["passive_time_s"] for case in cases], device=device
@@ -357,7 +363,14 @@ def main() -> None:
                 vmc_term.reset(handoff_ids)
                 handoff_seen[handoff_ids] = True
             vmc_term.set_motor_enable_scale(motor_scale)
+            debug_drive = phase >= PowerOnStandController.STABILIZE
+            actions[debug_drive, 2] = 0.15
+            actions[debug_drive, 5] = 0.15
             observations, _, _, _, _ = env.step(actions)
+            if step % 50 == 0:
+                print(f"DBG step={step} phase={int(phase[0])} aL={actions[0,2].item():+.3f} aR={actions[0,5].item():+.3f} wL={robot.data.joint_vel[0,vmc_term.joint_ids[2]].item():+.3f} wR={robot.data.joint_vel[0,vmc_term.joint_ids[5]].item():+.3f} x={robot.data.root_pos_w[0,0].item():+.4f} vx={robot.data.root_lin_vel_b[0,0].item():+.4f}")
+            if step % 50 == 0:
+                print(f"DBG step={step} phase={int(phase[0])} aL={actions[0,2].item():+.3f} aR={actions[0,5].item():+.3f} wL={robot.data.joint_vel[0,vmc_term.joint_ids[2]].item():+.3f} wR={robot.data.joint_vel[0,vmc_term.joint_ids[5]].item():+.3f} x={robot.data.root_pos_w[0,0].item():+.4f} vx={robot.data.root_lin_vel_b[0,0].item():+.4f}")
             controller.advance(step_dt)
 
             tilt = torch.acos(
@@ -449,6 +462,8 @@ def main() -> None:
         torch.clamp(-robot.data.projected_gravity_b[:, 2], -1.0, 1.0)
     )
     final_height = unwrapped.base_height.clone()
+    print("OPEN_LOOP dx=", (robot.data.root_pos_w[:, 0] - debug_start_x).detach().cpu().tolist())
+    print("OPEN_LOOP vx=", robot.data.root_lin_vel_b[:, 0].detach().cpu().tolist())
     final_ang_vel = torch.linalg.vector_norm(robot.data.root_ang_vel_b, dim=1)
     final_forces = contact_sensor.data.net_forces_w
     final_wheel_contact = (

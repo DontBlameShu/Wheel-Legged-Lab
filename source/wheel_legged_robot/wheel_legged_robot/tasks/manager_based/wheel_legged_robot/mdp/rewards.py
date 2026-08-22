@@ -82,6 +82,48 @@ def base_height_reward_simple(
     return reward
 
 
+def stationary_position_penalty(env: ManagerBasedRLEnv, command_name: str, pos_std: float = 0.5) -> torch.Tensor:
+    """Penalize XY drift only during explicit standstill command windows."""
+    if not hasattr(env, "_hold_xy"):
+        return torch.zeros(env.num_envs, device=env.device)
+    command_term = env.command_manager.get_term(command_name)
+    if not hasattr(command_term, "_is_standstill"):
+        return torch.zeros(env.num_envs, device=env.device)
+    delta_xy = env.scene["robot"].data.root_pos_w[:, :2] - env._hold_xy
+    dist_sq = torch.sum(torch.square(delta_xy), dim=1)
+    pos_penalty = 1.0 - torch.exp(-dist_sq / pos_std**2)
+    return pos_penalty * command_term._is_standstill.float()
+
+
+def standstill_leg_action_rate_l2(env: ManagerBasedRLEnv, command_name: str = "wheel_legged_commands") -> torch.Tensor:
+    """Penalize changes of the four leg actions only during explicit standstill windows."""
+    term = env.command_manager.get_term(command_name)
+    if not hasattr(term, "_is_standstill"):
+        return torch.zeros(env.num_envs, device=env.device)
+    delta = env.action_manager.action[:, [0, 1, 3, 4]] - env.action_manager.prev_action[:, [0, 1, 3, 4]]
+    return torch.sum(torch.square(delta), dim=1) * term._is_standstill.float()
+
+
+def theta0_dot_l2(env: ManagerBasedRLEnv, ref: float = 1.0, command_name: str = "wheel_legged_commands") -> torch.Tensor:
+    """Normalized virtual-leg angular-velocity penalty during standstill."""
+    if not hasattr(env, "theta0_dot"):
+        return torch.zeros(env.num_envs, device=env.device)
+    term = env.command_manager.get_term(command_name)
+    if not hasattr(term, "_is_standstill"):
+        return torch.zeros(env.num_envs, device=env.device)
+    return torch.sum(torch.square(env.theta0_dot / ref), dim=1) * term._is_standstill.float()
+
+
+def L0_dot_l2(env: ManagerBasedRLEnv, ref: float = 0.05, command_name: str = "wheel_legged_commands") -> torch.Tensor:
+    """Normalized virtual-leg length-velocity penalty during standstill."""
+    if not hasattr(env, "L0_dot"):
+        return torch.zeros(env.num_envs, device=env.device)
+    term = env.command_manager.get_term(command_name)
+    if not hasattr(term, "_is_standstill"):
+        return torch.zeros(env.num_envs, device=env.device)
+    return torch.sum(torch.square(env.L0_dot / ref), dim=1) * term._is_standstill.float()
+
+
 def joint_acc_l2(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),

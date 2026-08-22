@@ -158,9 +158,9 @@ class VMCAction(ActionTerm):
 
         # 运动学计算（左腿：0,1,2；右腿：3,4,5）
         # theta1 = [q0, -q3]     (左髋, 右髋)
-        theta1 = torch.stack([dof_pos[:, 0], -dof_pos[:, 3]], dim=-1)
+        theta1 = torch.stack([-3.1085965751 + dof_pos[:, 0], -3.0737803757 - dof_pos[:, 3]], dim=-1)
         # theta2 = [q1 + pi/2, -q4 + pi/2]   (左膝, 右膝)
-        theta2 = torch.stack([dof_pos[:, 1] + self._pi/2, -dof_pos[:, 4] + self._pi/2], dim=-1)
+        theta2 = torch.stack([2.5040614696 - dof_pos[:, 1], 2.4263873329 + dof_pos[:, 4]], dim=-1)
 
         # 前向运动学：计算 L0, theta0
         L0, theta0 = self._forward_kinematics(theta1, theta2)
@@ -176,7 +176,7 @@ class VMCAction(ActionTerm):
         # 3. 计算导数 — 使用关节速度 + FK（与原始 Isaac Gym 一致，比位置差分更准确）
         # 原始代码：leg_post_physics_step() 中 dt=0.001
         theta1_dot = torch.stack([dof_vel[:, 0], -dof_vel[:, 3]], dim=-1)
-        theta2_dot = torch.stack([dof_vel[:, 1], -dof_vel[:, 4]], dim=-1)
+        theta2_dot = torch.stack([-dof_vel[:, 1], dof_vel[:, 4]], dim=-1)
         dt_deriv = 0.001  # 与原始 Isaac Gym 一致
         L0_temp, theta0_temp = self._forward_kinematics(
             theta1 + theta1_dot * dt_deriv, theta2 + theta2_dot * dt_deriv
@@ -234,6 +234,7 @@ class VMCAction(ActionTerm):
 
         # 轮子速度控制（PI 控制，带积分项消除稳态误差）
         wheel_vel = dof_vel[:, [2, 5]]  # 左轮、右轮速度
+        self.debug_wheel_vel = wheel_vel.detach()
         wheel_vel_error = wheel_vel_ref - wheel_vel
         # 积分项，带限幅防止 windup
         # apply_actions 每个 physics step 都会调用，因此必须使用 physics_dt，
@@ -256,6 +257,9 @@ class VMCAction(ActionTerm):
             )
         )
         torque_wheel = self.cfg.kp_wheel * wheel_vel_error + self._wheel_vel_integral
+        self.debug_wheel_ref = wheel_vel_ref.detach()
+        self.debug_wheel_torque = torque_wheel.detach()
+        self.debug_wheel_integral = self._wheel_vel_integral.detach()
 
         # 6. 通过 VMC 雅可比映射到关节力矩
         T1, T2 = self._vmc_mapping(theta1, theta2, L0, theta0, force_L0, torque_theta)
@@ -263,11 +267,11 @@ class VMCAction(ActionTerm):
         # 7. 组合完整力矩（6维：左髋、左膝、左轮、右髋、右膝、右轮）
         # 注意：右腿符号需要根据你的 VMC 映射决定，此处取负（与原代码一致）
         torques = torch.cat([
-            T1[:, 0:1],           # 左髋
-            T2[:, 0:1],           # 左膝
+            -T1[:, 0:1],          # left joint 1
+            T2[:, 0:1],           # left joint 2
             torque_wheel[:, 0:1], # 左轮
-            -T1[:, 1:2],          # 右髋（取反）
-            -T2[:, 1:2],          # 右膝（取反）
+            T1[:, 1:2],           # right joint 1
+            -T2[:, 1:2],          # right joint 2
             torque_wheel[:, 1:2], # 右轮
         ], dim=-1)
 
@@ -307,7 +311,8 @@ class VMCAction(ActionTerm):
         end_y = l1 * torch.sin(theta1) + l2 * torch.sin(theta1 + theta2)
 
         L0 = torch.sqrt(end_x**2 + end_y**2)
-        theta0 = torch.atan2(end_y, end_x) - self._pi / 2
+        theta0 = torch.atan2(end_y, end_x) + self._pi / 2
+        theta0 = torch.atan2(torch.sin(theta0), torch.cos(theta0))
         return L0, theta0
 
     def _vmc_mapping(self, theta1, theta2, L0, theta0, force, torque):
@@ -346,18 +351,18 @@ class VMCActionCfg(ActionTermCfg):
 
     asset_name: str = "robot"
     joint_names: tuple[str, ...] = (
-        "lf0_Joint",
-        "lf1_Joint",
-        "l_wheel_Joint",
-        "rf0_Joint",
-        "rf1_Joint",
-        "r_wheel_Joint",
+        "Left_rear_joint",
+        "Left_rear_child1_joint",
+        "Left_Wheel_joint",
+        "Right_rear_joint",
+        "Right_rear_child1_joint",
+        "Right_Wheel_joint",
     )
 
     # === VMC 参数 ===
     action_scale_theta: float = 0.5
-    action_scale_l0: float = 0.1
-    action_scale_vel: float = 10.0
+    action_scale_l0: float = 0.05
+    action_scale_vel: float = 20.0
     action_clip: float = 1.0
 
     l0_offset: float = 0.237
@@ -367,9 +372,9 @@ class VMCActionCfg(ActionTermCfg):
     feedforward_force: float = 40.0
 
     kp_theta: float = 50.0
-    kd_theta: float = 3.0
+    kd_theta: float = 4.0
     kp_l0: float = 900.0
-    kd_l0: float = 20.0
+    kd_l0: float = 25.0
     kp_wheel: float = 10.0
     kp_wheel_integral: float = 1.0
     wheel_integral_limit_ratio: float = 0.25

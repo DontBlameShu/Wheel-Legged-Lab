@@ -7,14 +7,10 @@ from . import WHEEL_LEGGED_ASSET_DIR
 ##
 # Configuration
 ##
-
 WHEEL_LEGGED_CFG = ArticulationCfg(
-    spawn=sim_utils.UrdfFileCfg(
-        fix_base=False,                     # 必须浮动，用于平衡控制
-        merge_fixed_joints=True,            # 合并固定关节（如果有）
-        replace_cylinders_with_capsules=True, # 你的连杆不是标准圆柱，保持 False
-        asset_path=str(WHEEL_LEGGED_ASSET_DIR / "urdf" / "wl_dealed.urdf"),
-        activate_contact_sensors=True,      # 开启轮子接触检测
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=str(WHEEL_LEGGED_ASSET_DIR / "urdf" / "COD_2026_Balance_2_0_floating.usd"),
+        activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             retain_accelerations=False,
@@ -25,24 +21,21 @@ WHEEL_LEGGED_CFG = ArticulationCfg(
             max_depenetration_velocity=1.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False,   # 避免左右腿互穿
+            enabled_self_collisions=False,
             solver_position_iteration_count=8,
             solver_velocity_iteration_count=2,
         ),
-        # 此处 joint_drive 的 stiffness/damping 会被 actuators 覆盖，设 0 即可
-        joint_drive=sim_utils.UrdfFileCfg.JointDriveCfg(
-            gains=sim_utils.UrdfFileCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
-        ),
     ),
+    articulation_root_prim_path="/base_link",
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.25),
+        pos=(0.0, 0.0, 0.345),
         joint_pos={
-            "lf0_Joint": 0.5,      # 髋关节直立
-            "rf0_Joint": -0.5,
-            "lf1_Joint": 0.35,      # 膝关节微屈，保持平衡姿态
-            "rf1_Joint": -0.35,
-            "l_wheel_Joint": 0.0,  # 轮子初始角度无所谓
-            "r_wheel_Joint": 0.0,
+            "Left_rear_joint": 0.347823,      # 髋关节直立
+            "Right_rear_joint": -0.313007,
+            "Left_rear_child1_joint": 0.410068,      # 膝关节微屈，保持平衡姿态
+            "Right_rear_child1_joint": -0.332394,
+            "Left_Wheel_joint": 0.0,  # 轮子初始角度无所谓
+            "Right_Wheel_joint": 0.0,
         },
         joint_vel={".*": 0.0},
     ),
@@ -50,7 +43,7 @@ WHEEL_LEGGED_CFG = ArticulationCfg(
     actuators={
         # 腿部关节：使用力矩控制
         "legs": DCMotorCfg(
-            joint_names_expr=["lf0_Joint", "lf1_Joint", "rf0_Joint", "rf1_Joint"],
+            joint_names_expr=["Left_rear_joint", "Left_rear_child1_joint", "Right_rear_joint", "Right_rear_child1_joint"],
             effort_limit=30.0,          # 根据 URDF 中的 effort
             saturation_effort=30.0,
             velocity_limit=30.0,        # rad/s
@@ -61,7 +54,7 @@ WHEEL_LEGGED_CFG = ArticulationCfg(
         ),
         # 轮子：使用力矩控制
         "wheels": DCMotorCfg(
-            joint_names_expr=["l_wheel_Joint", "r_wheel_Joint"],
+            joint_names_expr=["Left_Wheel_joint", "Right_Wheel_joint"],
             effort_limit=5.0,           # URDF 中 effort=5
             saturation_effort=5.0,
             velocity_limit=1000.0,      # 轮子允许高速

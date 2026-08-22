@@ -10,7 +10,9 @@
 import argparse
 import os
 import sys
-
+os.add_dll_directory(
+    r"D:\Program\miniconda3\envs\env_isaaclab\Lib\site-packages\numpy.libs"
+)
 from isaaclab.app import AppLauncher
 
 # local imports
@@ -542,7 +544,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if version.parse(installed_version) >= version.parse("4.0.0"):
         # use the new export functions for rsl-rl >= 4.0.0
         runner.export_policy_to_jit(path=export_model_dir, filename="policy.pt")
-        runner.export_policy_to_onnx(path=export_model_dir, filename="policy.onnx")
+    # # runner.export_policy_to_onnx(path=export_model_dir, filename="policy.onnx")
     else:
         # extract the neural network for rsl-rl < 4.0.0
         if version.parse(installed_version) >= version.parse("2.3.0"):
@@ -570,7 +572,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     power_wheel_body_ids = None
     if keyboard_controller is not None:
         power_contact_sensor = env.unwrapped.scene.sensors["contact_forces"]
-        power_wheel_body_ids, _ = power_contact_sensor.find_bodies(".*wheel.*")
+        power_wheel_body_ids, _ = power_contact_sensor.find_bodies(".*[Ww]heel.*")
         if len(power_wheel_body_ids) != 2:
             raise RuntimeError("Keyboard power cycle requires exactly two wheel bodies.")
 
@@ -700,7 +702,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 break
 
         if args_cli.keyboard:
-            camera_follow(env)
+            pass  # camera follow disabled
 
         # time delay for real-time evaluation
         sleep_time = dt - (time.time() - start_time)

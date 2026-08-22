@@ -164,7 +164,7 @@ class ObstacleOracleCfg:
     max_takeoff_margin: float = 0.07
     landing_margin: float = 0.02
     minimum_clearance: float = 0.015
-    wheel_radius: float = 0.0675
+    wheel_radius: float = 0.058
     contact_force_threshold: float = 2.0
 
 
@@ -238,12 +238,12 @@ class WheelLeggedObstacleSceneCfg(WheelLeggedRobotSceneCfg):
     # Contact filtering is one-to-many only in Isaac Lab. Use one sensor per
     # robot body instead of a Robot/.* expression.
     obstacle_contact_base = _obstacle_body_contact_sensor("base_link")
-    obstacle_contact_lf0 = _obstacle_body_contact_sensor("lf0_Link")
-    obstacle_contact_lf1 = _obstacle_body_contact_sensor("lf1_Link")
-    obstacle_contact_rf0 = _obstacle_body_contact_sensor("rf0_Link")
-    obstacle_contact_rf1 = _obstacle_body_contact_sensor("rf1_Link")
-    obstacle_contact_lwheel = _obstacle_body_contact_sensor("l_wheel_Link")
-    obstacle_contact_rwheel = _obstacle_body_contact_sensor("r_wheel_Link")
+    obstacle_contact_lf0 = _obstacle_body_contact_sensor("Left_rear_link")
+    obstacle_contact_lf1 = _obstacle_body_contact_sensor("Left_rear_child1_link")
+    obstacle_contact_rf0 = _obstacle_body_contact_sensor("Right_rear_link")
+    obstacle_contact_rf1 = _obstacle_body_contact_sensor("Right_rear_child1_link")
+    obstacle_contact_lwheel = _obstacle_body_contact_sensor("Left_Wheel_link")
+    obstacle_contact_rwheel = _obstacle_body_contact_sensor("Right_Wheel_link")
 
 
 @configclass

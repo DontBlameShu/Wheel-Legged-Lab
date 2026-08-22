@@ -76,3 +76,8 @@ tests/
 # TacSL sensor
 **/tactile_record/*
 **/gelsight_r15_data/*
+old_actions.py
+old_wl_dealed.urdf
+*before_6dof.urdf
+*before_disable_leg_collision.urdf
+x
