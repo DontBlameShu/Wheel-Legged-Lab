@@ -449,3 +449,16 @@ class WheelLeggedTerrainPerceptiveEnvCfg(WheelLeggedTerrainReactiveEnvCfg):
         self.observations.critic.joint_vel.scale = 0.05
         self.observations.critic.height_scan.scale = 5.0
         self.observations.critic.torques.scale = 0.05
+
+
+@configclass
+class WheelLeggedStrongRecoveryDropFlatEnvCfg(WheelLeggedRecoveryFlatEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.events.reset_base.params["pose_range"].update({"z":(0.0,0.12),"roll":(-0.40,0.40),"pitch":(-0.50,0.50)})
+        self.events.reset_base.params["velocity_range"].update({"x":(-0.55,0.55),"y":(-0.25,0.25),"z":(-1.00,0.20),"roll":(-1.60,1.60),"pitch":(-1.60,1.60),"yaw":(-0.60,0.60)})
+        self.events.push_robot.interval_range_s=(2.0,4.0)
+        self.events.push_robot.params["max_push_vel_xy"]=1.4
+        self.events.push_robot.params["force_scale_z"]=0.25
+        self.terminations.bad_orientation.params["limit_angle"]=1.35
+        self.terminations.minimum_height.params["minimum_height"]=0.070
