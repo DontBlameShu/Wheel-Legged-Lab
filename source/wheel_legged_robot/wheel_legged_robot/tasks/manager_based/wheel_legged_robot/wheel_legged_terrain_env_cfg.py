@@ -135,6 +135,9 @@ class WheelLeggedRobustEnv(WheelLeggedVMCEnv):
         self._recovery_success_rate = 0.0
         self._recovery_failure_rate = 0.0
         self._recovery_mean_time = 0.0
+        self._recovery_failure_tilt = float(getattr(cfg, "recovery_failure_tilt", 1.0))
+        self._recovery_failure_height = float(getattr(cfg, "recovery_failure_height", 0.085))
+        self._recovery_timeout = float(getattr(cfg, "recovery_timeout", 2.5))
 
         self._terrain_commanded_distance = torch.zeros(
             self.num_envs, device=self.device
@@ -174,7 +177,7 @@ class WheelLeggedRobustEnv(WheelLeggedVMCEnv):
             self._recovery_success_rate = successes / attempts
             self._recovery_failure_rate = 1.0 - self._recovery_success_rate
             self._recovery_mean_time = (
-                self._recovery_window_time / successes if successes > 0 else 2.5
+                self._recovery_window_time / successes if successes > 0 else self._recovery_timeout
             )
             self._recovery_window_attempts = 0
             self._recovery_window_successes = 0
@@ -462,3 +465,37 @@ class WheelLeggedStrongRecoveryDropFlatEnvCfg(WheelLeggedRecoveryFlatEnvCfg):
         self.events.push_robot.params["force_scale_z"]=0.25
         self.terminations.bad_orientation.params["limit_angle"]=1.35
         self.terminations.minimum_height.params["minimum_height"]=0.070
+
+@configclass
+class WheelLeggedSelfRightingFlatEnvCfg(WheelLeggedRecoveryFlatEnvCfg):
+    """Full sagittal self-righting stage."""
+
+    recovery_failure_tilt: float = 3.2
+    recovery_failure_height: float = -1.0
+    recovery_timeout: float = 5.0
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.actions.vmc.action_scale_theta = 0.70
+        pose = self.events.reset_base.params["pose_range"]
+        pose.update({"z": (0.0, 0.12), "roll": (-0.25, 0.25), "pitch": (-0.70, 0.70)})
+        velocity = self.events.reset_base.params["velocity_range"]
+        velocity.update({"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (-0.20, 0.10), "roll": (-0.30, 0.30), "pitch": (-0.50, 0.50), "yaw": (-0.20, 0.20)})
+        self.events.push_robot.params["max_push_vel_xy"] = 0.0
+        self.terminations.bad_orientation.params["limit_angle"] = 3.2
+        self.terminations.minimum_height.params["minimum_height"] = -1.0
+        command = self.commands.wheel_legged_commands
+        command.ranges.lin_vel_x = (0.0, 0.0)
+        command.ranges.ang_vel_yaw = (0.0, 0.0)
+        self.rewards.lin_vel_z.weight = 0.0
+        self.rewards.ang_vel_xy.weight = 0.0
+        self.rewards.stationary_position.weight = 0.0
+        self.rewards.theta0_dot_damping.weight = 0.0
+        self.rewards.L0_dot_damping.weight = 0.0
+        self.rewards.standstill_leg_action_rate.weight = 0.0
+        self.rewards.dof_pos_limits.weight = 0.0
+        self.rewards.collision.weight = 0.0
+        self.rewards.leg_collision.weight = 0.0
+        self.rewards.nominal_state.weight = 0.0
+        self.rewards.leg_posture.weight = 0.0
+

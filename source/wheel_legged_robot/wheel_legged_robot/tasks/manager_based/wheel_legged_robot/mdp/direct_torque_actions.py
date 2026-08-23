@@ -78,7 +78,8 @@ class DirectTorqueVMCAction(VMCAction):
         self.debug_wheel_integral.zero_()
 
         # Leg VMC task-space control.
-        torque_theta = self._theta_kp * (theta0_ref - theta0) - self._theta_kd * theta0_dot
+        theta0_error = torch.atan2(torch.sin(theta0_ref - theta0), torch.cos(theta0_ref - theta0))
+        torque_theta = self._theta_kp * theta0_error - self._theta_kd * theta0_dot
         l0_kp, l0_kd, feedforward_force = self._get_l0_control_parameters()
         force_L0 = l0_kp * (L0_ref - L0) - l0_kd * L0_dot
         force_L0 += feedforward_force

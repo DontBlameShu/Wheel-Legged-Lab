@@ -181,7 +181,8 @@ class VMCAction(ActionTerm):
         L0_temp, theta0_temp = self._forward_kinematics(
             theta1 + theta1_dot * dt_deriv, theta2 + theta2_dot * dt_deriv
         )
-        theta0_dot = (theta0_temp - theta0) / dt_deriv
+        theta0_delta = torch.atan2(torch.sin(theta0_temp - theta0), torch.cos(theta0_temp - theta0))
+        theta0_dot = theta0_delta / dt_deriv
         L0_dot = (L0_temp - L0) / dt_deriv
 
         # 同步写入环境属性（供观测和奖励使用）
@@ -226,7 +227,8 @@ class VMCAction(ActionTerm):
 
         # 5. VMC 控制力计算
         # 力矩（任务空间）：theta 和 L0 的 PD 控制
-        torque_theta = self._theta_kp * (theta0_ref - theta0) - self._theta_kd * theta0_dot
+        theta0_error = torch.atan2(torch.sin(theta0_ref - theta0), torch.cos(theta0_ref - theta0))
+        torque_theta = self._theta_kp * theta0_error - self._theta_kd * theta0_dot
         l0_kp, l0_kd, feedforward_force = self._get_l0_control_parameters()
         force_L0 = l0_kp * (L0_ref - L0) - l0_kd * L0_dot
         # 加上前馈力
