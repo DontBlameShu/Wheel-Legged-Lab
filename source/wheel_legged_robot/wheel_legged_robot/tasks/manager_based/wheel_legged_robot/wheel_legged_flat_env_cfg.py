@@ -1109,10 +1109,10 @@ class WheelLeggedCurriculumCfg:
             "reward_term_name": "track_lin_vel",           # 奖励项名称
             "command_name": "wheel_legged_commands",       # 命令项名称
             "angular_reward_term_name": "track_ang_vel",   # yaw 课程奖励项
-            "range_multiplier": (0.5, 1.0),                # 初始 10%，最终 100%
+            "range_multiplier": (0.1, 1.0),                # 初始 10%，最终 100%
             "threshold": 0.85,                              # 完整时长归一化得分阈值
             "step_size": 0.10,                             # 每次扩大 0.05 m/s
-            "initial_ang_vel_limit": 2.0,                  # 初始最大 0.5 rad/s
+            "initial_ang_vel_limit": 0.5,                  # 初始最大 0.5 rad/s
             "final_ang_vel_limit": 3.0,                    # 覆盖 0.6*pi
             "angular_threshold": 0.80,
             "angular_step_size": 0.25,
