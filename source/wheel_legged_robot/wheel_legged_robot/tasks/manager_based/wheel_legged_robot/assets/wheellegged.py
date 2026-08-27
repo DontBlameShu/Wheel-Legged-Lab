@@ -53,13 +53,13 @@ WHEEL_LEGGED_CFG = ArticulationCfg(
             damping=0.0,
             friction=0.0,
         ),
-        # 轮子：DJI M3508 + 自制 268/17 减速箱，完全替换原装减速箱。
+        # 轮子：DJI M3508 + 16.875:1 减速箱。
         # 策略直接输出轮轴扭矩；4 N·m 作为短时峰值硬限制。
         "wheels": DCMotorCfg(
             joint_names_expr=["Left_Wheel_joint", "Right_Wheel_joint"],
             effort_limit=4.0,
             saturation_effort=4.0,
-            velocity_limit=1000.0,
+            velocity_limit=57.4,
             stiffness=0.0,
             damping=0.0,
             friction=0.0,

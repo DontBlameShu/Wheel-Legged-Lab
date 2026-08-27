@@ -471,7 +471,7 @@ class VmcActionsCfg:
         action_scale_l0=0.06,
         # r≈0.058 m、半轮距≈0.208 m。vx=1 m/s 且 heading 误差为 pi 时，
         # wz≈0.6*pi，快侧轮约需 21.8 rad/s；24 留出约 10% 余量。
-        action_scale_vel=36.0,
+        action_scale_vel=57.4,
         action_clip=1.0,
         l0_offset=0.237,
         l0_min=0.18,
@@ -1088,7 +1088,7 @@ class WheelLeggedCommandsCfg:
         rel_heading_envs=1.0,
         standstill_envs=0.15,                   # 所有环境都使用朝向控制
         ranges=mdp.WheelLeggedCommandCfg.Ranges(
-            lin_vel_x=(-2.0, 2.0),
+            lin_vel_x=(-3.3, 3.3),
             # heading 模式下 wz=0.6*wrap_to_pi(error)，理论最大约 1.885 rad/s。
             # ±2.0 已完整覆盖；设置成 ±5.0 不会产生更快的实际命令。
             ang_vel_yaw=(-3.0, 3.0),

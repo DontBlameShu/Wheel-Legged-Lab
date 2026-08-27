@@ -15,6 +15,7 @@ import torch
 from isaaclab.managers import CurriculumTermCfg
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
@@ -110,6 +111,11 @@ class WheelLeggedTerrainSceneCfg(WheelLeggedRobotSceneCfg):
     )
 
 
+def recovery_attempt_resolved(env):
+    """End an episode after its recovery trial succeeds or times out."""
+    return ~env._recovery_pending
+
+
 class WheelLeggedRobustEnv(WheelLeggedVMCEnv):
     """Base environment with compact robustness diagnostics."""
 
@@ -135,6 +141,9 @@ class WheelLeggedRobustEnv(WheelLeggedVMCEnv):
         self._recovery_success_rate = 0.0
         self._recovery_failure_rate = 0.0
         self._recovery_mean_time = 0.0
+        self._recovery_success_tilt = float(getattr(cfg, "recovery_success_tilt", 0.25))
+        self._recovery_success_height = float(getattr(cfg, "recovery_success_height", 0.14))
+        self._recovery_stable_duration = float(getattr(cfg, "recovery_stable_duration", 0.30))
         self._recovery_failure_tilt = float(getattr(cfg, "recovery_failure_tilt", 1.0))
         self._recovery_failure_height = float(getattr(cfg, "recovery_failure_height", 0.085))
         self._recovery_timeout = float(getattr(cfg, "recovery_timeout", 2.5))
@@ -211,7 +220,7 @@ class WheelLeggedRobustEnv(WheelLeggedVMCEnv):
         self._recovery_elapsed[active] += self.step_dt
         gravity_b = self._robot.data.projected_gravity_b
         tilt = torch.acos(torch.clamp(-gravity_b[:, 2], -1.0, 1.0))
-        stable = (tilt < 0.25) & (self.base_height > 0.14)
+        stable = (tilt < self._recovery_success_tilt) & (self.base_height > self._recovery_success_height)
         evaluate = self._recovery_elapsed >= 0.25
         accumulating = active & evaluate & stable
         self._recovery_stable_time = torch.where(
@@ -219,11 +228,11 @@ class WheelLeggedRobustEnv(WheelLeggedVMCEnv):
             self._recovery_stable_time + self.step_dt,
             torch.zeros_like(self._recovery_stable_time),
         )
-        success = active & (self._recovery_stable_time >= 0.30)
+        success = active & (self._recovery_stable_time >= self._recovery_stable_duration)
         failure = active & (
-            (tilt > 1.0)
-            | (self.base_height < 0.085)
-            | (self._recovery_elapsed >= 2.5)
+            (tilt > self._recovery_failure_tilt)
+            | (self.base_height < self._recovery_failure_height)
+            | (self._recovery_elapsed >= self._recovery_timeout)
         ) & (~success)
         resolved = success | failure
         if resolved.any():
@@ -476,9 +485,9 @@ class WheelLeggedSelfRightingFlatEnvCfg(WheelLeggedRecoveryFlatEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.actions.vmc.action_scale_theta = 0.70
+        self.actions.vmc.action_scale_theta = 0.95
         pose = self.events.reset_base.params["pose_range"]
-        pose.update({"z": (0.0, 0.12), "roll": (-0.25, 0.25), "pitch": (-0.70, 0.70)})
+        pose.update({"z": (0.0, 0.12), "roll": (-0.25, 0.25), "pitch": (-0.95, 0.95)})
         velocity = self.events.reset_base.params["velocity_range"]
         velocity.update({"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (-0.20, 0.10), "roll": (-0.30, 0.30), "pitch": (-0.50, 0.50), "yaw": (-0.20, 0.20)})
         self.events.push_robot.params["max_push_vel_xy"] = 0.0
@@ -498,4 +507,27 @@ class WheelLeggedSelfRightingFlatEnvCfg(WheelLeggedRecoveryFlatEnvCfg):
         self.rewards.leg_collision.weight = 0.0
         self.rewards.nominal_state.weight = 0.0
         self.rewards.leg_posture.weight = 0.0
+
+
+
+@configclass
+class WheelLeggedGlobalSelfRightingFlatEnvCfg(WheelLeggedSelfRightingFlatEnvCfg):
+    """Experimental full sagittal self-righting from arbitrary pitch."""
+
+    recovery_timeout: float = 6.0
+    recovery_success_tilt: float = 0.20
+    recovery_success_height: float = 0.24
+    recovery_stable_duration: float = 0.30
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.terminations.recovery_resolved = DoneTerm(func=recovery_attempt_resolved)
+        self.actions.vmc.action_scale_theta = 3.141592653589793
+        self.terminations.bad_orientation.params["limit_angle"] = 2.10
+        pose = self.events.reset_base.params["pose_range"]
+        pose.update({"z": (0.0, 0.12), "roll": (-0.25, 0.25), "pitch": (-2.00, 2.00)})
+        velocity = self.events.reset_base.params["velocity_range"]
+        velocity.update({"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (-0.20, 0.10), "roll": (-0.40, 0.40), "pitch": (-0.80, 0.80), "yaw": (-0.20, 0.20)})
+        self.events.push_robot.interval_range_s = (1000.0, 1000.0)
+        self.events.push_robot.params["max_push_vel_xy"] = 0.0
 

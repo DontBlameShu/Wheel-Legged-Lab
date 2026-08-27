@@ -61,6 +61,7 @@ parser.add_argument(
         "this may come from a different experiment while logs use the new task's experiment."
     ),
 )
+parser.add_argument("--reset_action_std", type=float, default=None, help="Reset loaded policy action std before training.")
 parser.add_argument("--min_action_std", type=float, default=None, help="Optional lower bound for learned action std.")
 parser.add_argument("--max_action_std", type=float, default=None, help="Optional upper bound for learned action std.")
 parser.add_argument(
@@ -482,6 +483,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             )
         else:
             runner.load(resume_path)
+
+    if args_cli.reset_action_std is not None:
+        reset_std = float(args_cli.reset_action_std)
+        if reset_std <= 0.0:
+            raise ValueError("--reset_action_std must be positive.")
+        actor = runner.alg.actor
+        with torch.no_grad():
+            if hasattr(actor, "distribution") and hasattr(actor.distribution, "std_param") and torch.is_tensor(actor.distribution.std_param):
+                actor.distribution.std_param.fill_(reset_std)
+            elif hasattr(actor, "std") and torch.is_tensor(actor.std):
+                actor.std.fill_(reset_std)
+            elif hasattr(actor, "log_std") and torch.is_tensor(actor.log_std):
+                actor.log_std.fill_(torch.log(torch.tensor(reset_std, device=actor.log_std.device)))
+            else:
+                raise RuntimeError("Unable to locate learned action std parameter on actor.")
+        print(f"[INFO] Reset loaded action std to {reset_std:.3f}.")
 
     min_action_std = args_cli.min_action_std
     max_action_std = args_cli.max_action_std

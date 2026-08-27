@@ -81,3 +81,4 @@ old_wl_dealed.urdf
 *before_6dof.urdf
 *before_disable_leg_collision.urdf
 x
+`n# Local large assets / temporary backups`n**/*.STL`n**/*.stl`n**/*.stp`n**/*.step`n**/*.before_*`n**/*.bak_*`n**/*.damaged_*
